@@ -1,14 +1,14 @@
 # termux-coding-agents
 
-Run the **official, current Claude Code CLI natively on Android** in Termux, with the full interactive UI and its built-in auto-updates. No root, no proot, no PC. Also covers [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), plus notes on oh-my-pi.
+Run the **official, current Claude Code CLI natively on Android** in Termux, with the full interactive UI and its built-in auto-updates. No root, no proot, no PC. The same technique runs [oh-my-pi](https://github.com/can1357/oh-my-pi)'s official Linux build, and [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) works with a plain npm install.
 
 | Agent | Status |
 |---|---|
 | **Claude Code** (latest) | ✅ Official linux-arm64 build: interactive UI, bundled search, auto-updates, `claude update` |
 | **pi** | ✅ `npm install -g @earendil-works/pi-coding-agent` |
-| **oh-my-pi** | ❌ Not working yet (see below) |
+| **oh-my-pi** | ✅ Official `omp-linux-arm64` build: interactive UI, native addon, `omp update` |
 
-Tested on a Samsung Galaxy Tab S9 FE, Android 16, Termux from Google Play (`googleplay.2026.10.09`), Claude Code 2.1.330 → 2.1.332.
+Tested on a Samsung Galaxy Tab S9 FE, Android 16, Termux from Google Play (`googleplay.2026.10.09`), Claude Code 2.1.330 → 2.1.332, oh-my-pi 19.2.1.
 
 ## Install Claude Code
 
@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/bobbymac/termux-coding-agents/main/
 claude          # then /login
 ```
 
-Or clone the repo and run `bash install.sh`. It takes about a minute and is safe to re-run.
+Or clone the repo and run `bash install.sh`. It takes about a minute and is safe to re-run. To add oh-my-pi, pass `--omp` (`... | bash -s -- --omp`); `--omp --no-claude` installs only oh-my-pi.
 
 **Updates:** Claude Code updates itself, as on any Linux machine. `claude update` forces a check, and `claude install <version>` switches versions. The `claude` launcher always starts whatever version the official updater selected.
 
@@ -78,9 +78,18 @@ pi              # then /login
 
 `@mariozechner/pi-coding-agent` is deprecated and renamed; uninstall it first if you have it.
 
-## oh-my-pi (not working yet)
+## oh-my-pi
 
-`omp` fails at startup because its Rust addon `@oh-my-pi/pi-natives` has no `android-arm64` build. Compiling it on the device fails: the project pins nightly Rust (≥ 1.101), and with stable Termux Rust, `rustc` crashes with a stack overflow on `cranelift-codegen` after about 236 crates. A promising next step is running `omp` on the official glibc Bun through `gexec`. Then it reports `linux-arm64`, and the published prebuilt addon applies.
+```sh
+curl -fsSL https://raw.githubusercontent.com/bobbymac/termux-coding-agents/main/install.sh | bash -s -- --omp
+omp             # then sign in
+```
+
+`bun install -g @oh-my-pi/pi-coding-agent` doesn't work on Termux. Android's Bun reports the platform as `android-arm64`, and `@oh-my-pi/pi-natives` (a Rust addon) has no build for it. Compiling it on the device fails too: the project needs nightly Rust, and `rustc` crashes on `cranelift-codegen`.
+
+The installer uses the project's official standalone `omp-linux-arm64` binary instead (Bun runtime and native addon included). It verifies the binary's sha256 from the GitHub release and starts it with `gexec`, like Claude Code.
+
+**Updates:** `omp update` works. omp replaces the first `omp` it finds on `PATH`, so the launcher puts the real binary's directory (`~/.local/share/omp/bin`) first on `PATH`, for the omp process only. Updates then land on the binary and the launcher stays intact. The installer also removes a leftover `~/.bun/bin/omp` link from an earlier `bun install -g`, since that would shadow the launcher.
 
 ## License
 

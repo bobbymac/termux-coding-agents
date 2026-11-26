@@ -1,15 +1,18 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Install the official Claude Code (latest, auto-updating, full UI) on Termux.
+# Run official glibc builds of coding agents natively on Termux.
 #
 #   curl -fsSL https://raw.githubusercontent.com/bobbymac/termux-coding-agents/main/install.sh | bash
-#   or, from a clone:  bash install.sh
+#   ... | bash -s -- --omp            Claude Code + oh-my-pi
+#   ... | bash -s -- --omp --no-claude   oh-my-pi only
+#   or, from a clone:  bash install.sh [--omp] [--no-claude]
 #
 # What it does:
 #   1. installs Termux's glibc (from the termux-glibc repo) plus build tools
 #   2. builds gexec (userspace exec for glibc programs) and gexec-preload.so
-#   3. installs the `claude` launcher and runs the official `claude install`
-#   4. installs adb-local and an Android-aware ~/.claude/CLAUDE.md
-# Re-running it is safe; it rebuilds gexec and leaves your Claude data alone.
+#   3. Claude Code: installs the `claude` launcher and runs the official `claude install`,
+#      plus adb-local and an Android-aware ~/.claude/CLAUDE.md
+#   4. oh-my-pi (--omp): downloads the official omp-linux-arm64 binary and its launcher
+# Re-running it is safe; it rebuilds gexec and leaves installed agents and their data alone.
 set -euo pipefail
 
 REPO_RAW="https://raw.githubusercontent.com/bobbymac/termux-coding-agents/main"
@@ -19,13 +22,23 @@ OFFICIAL="https://packages.termux.dev/apt/termux-main"
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
+WANT_CLAUDE=1 WANT_OMP=0
+for arg in "$@"; do
+	case "$arg" in
+	--omp) WANT_OMP=1 ;;
+	--no-claude) WANT_CLAUDE=0 ;;
+	-h | --help) sed -n '2,16p' "$0" 2>/dev/null || true; exit 0 ;;
+	*) echo "unknown option: $arg" >&2; exit 2 ;;
+	esac
+done
+
 # Work from a clone if we're in one, otherwise download the sources.
 SRC=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)
 if [ -z "$SRC" ] || [ ! -f "$SRC/glibc-exec/gexec.c" ]; then
 	SRC=$(mktemp -d "$PREFIX/tmp/tca.XXXXXX")
 	trap 'rm -rf "$SRC"' EXIT
 	mkdir -p "$SRC/glibc-exec" "$SRC/android"
-	for f in glibc-exec/gexec.c glibc-exec/gexec-preload.c glibc-exec/claude-wrapper.sh android/adb-local android/CLAUDE.md; do
+	for f in glibc-exec/gexec.c glibc-exec/gexec-preload.c glibc-exec/claude-wrapper.sh glibc-exec/omp-wrapper.sh android/adb-local android/CLAUDE.md; do
 		curl -fsSL "$REPO_RAW/$f" -o "$SRC/$f"
 	done
 fi
@@ -40,7 +53,7 @@ deb_from_official() { # install one package straight from the official Termux re
 }
 
 say "Installing build tools"
-pkg install -y clang curl coreutils >/dev/null
+pkg install -y clang curl coreutils jq >/dev/null
 
 say "Adding the Termux glibc repository"
 if ! dpkg -s glibc-repo >/dev/null 2>&1; then
@@ -74,43 +87,78 @@ clang --target=aarch64-unknown-linux-gnu -nostdinc -isystem "$(clang -print-reso
 GEXEC_GLIBC_LD_PRELOAD="$PREFIX/lib/gexec/gexec-preload.so" gexec "$G/bin/uname" -m >/dev/null ||
 	{ echo "gexec self-test failed" >&2; exit 1; }
 
-say "Installing the claude launcher"
-install -m 755 "$SRC/glibc-exec/claude-wrapper.sh" "$PREFIX/bin/claude"
-hash -r
+install_claude() {
+	say "Installing the claude launcher"
+	install -m 755 "$SRC/glibc-exec/claude-wrapper.sh" "$PREFIX/bin/claude"
+	hash -r
 
-if ! claude --version >/dev/null 2>&1; then
-	say "Downloading Claude Code (official linux-arm64 build)"
-	pkg install -y nodejs >/dev/null
-	ver=$(npm view @anthropic-ai/claude-code-linux-arm64 version)
-	tmp=$(mktemp -d "$PREFIX/tmp/cc.XXXXXX")
-	(cd "$tmp" && npm pack --silent "@anthropic-ai/claude-code-linux-arm64@$ver" >/dev/null && tar xzf ./*.tgz)
-	mkdir -p "$HOME/.local/share/claude/versions"
-	bootstrap="$HOME/.local/share/claude/versions/$ver"
-	mv "$tmp/package/claude" "$bootstrap"
-	rm -rf "$tmp"
-	say "Running the official installer"
-	GEXEC_GLIBC_LD_PRELOAD="$PREFIX/lib/gexec/gexec-preload.so" gexec -a claude "$bootstrap" install
+	if ! claude --version >/dev/null 2>&1; then
+		say "Downloading Claude Code (official linux-arm64 build)"
+		pkg install -y nodejs >/dev/null
+		ver=$(npm view @anthropic-ai/claude-code-linux-arm64 version)
+		tmp=$(mktemp -d "$PREFIX/tmp/cc.XXXXXX")
+		(cd "$tmp" && npm pack --silent "@anthropic-ai/claude-code-linux-arm64@$ver" >/dev/null && tar xzf ./*.tgz)
+		mkdir -p "$HOME/.local/share/claude/versions"
+		bootstrap="$HOME/.local/share/claude/versions/$ver"
+		mv "$tmp/package/claude" "$bootstrap"
+		rm -rf "$tmp"
+		say "Running the official installer"
+		GEXEC_GLIBC_LD_PRELOAD="$PREFIX/lib/gexec/gexec-preload.so" gexec -a claude "$bootstrap" install
+	fi
+
+	if ! grep -q 'HOME/.local/bin' "$HOME/.bashrc" 2>/dev/null; then
+		printf '\n# Claude Code native install (after $PREFIX/bin so the Termux launcher wins)\nexport PATH="$PATH:$HOME/.local/bin"\n' >> "$HOME/.bashrc"
+	fi
+
+	say "Android access helpers"
+	pkg install -y android-tools termux-api nmap >/dev/null
+	install -m 755 "$SRC/android/adb-local" "$PREFIX/bin/adb-local"
+	mkdir -p "$HOME/.claude"
+	if [ -e "$HOME/.claude/CLAUDE.md" ] && ! cmp -s "$SRC/android/CLAUDE.md" "$HOME/.claude/CLAUDE.md"; then
+		cp "$SRC/android/CLAUDE.md" "$HOME/.claude/CLAUDE.android.md"
+		echo "Kept your ~/.claude/CLAUDE.md; the Android guide is in ~/.claude/CLAUDE.android.md"
+	else
+		cp "$SRC/android/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
+	fi
+
+}
+
+install_omp() {
+	say "Installing oh-my-pi (official omp-linux-arm64 build)"
+	local dir="$HOME/.local/share/omp/bin"
+	mkdir -p "$dir"
+	if [ ! -f "$dir/omp" ]; then
+		local rel url digest
+		rel=$(curl -fsSL https://api.github.com/repos/can1357/oh-my-pi/releases/latest)
+		url=$(jq -r '.assets[] | select(.name == "omp-linux-arm64") | .browser_download_url' <<<"$rel")
+		digest=$(jq -r '.assets[] | select(.name == "omp-linux-arm64") | .digest' <<<"$rel")
+		[ -n "$url" ] && [ "$url" != null ] || { echo "no omp-linux-arm64 in the latest release" >&2; return 1; }
+		curl -fL --progress-bar "$url" -o "$dir/omp.new"
+		if [ -n "$digest" ] && [ "$digest" != null ]; then
+			echo "${digest#sha256:}  $dir/omp.new" | sha256sum -c - >/dev/null || { rm -f "$dir/omp.new"; echo "omp checksum mismatch" >&2; return 1; }
+		fi
+		chmod 755 "$dir/omp.new"
+		mv "$dir/omp.new" "$dir/omp"
+	fi
+	install -m 755 "$SRC/glibc-exec/omp-wrapper.sh" "$PREFIX/bin/omp"
+	# A `bun install -g` omp (which can't load its native addon on Android) would
+	# shadow the launcher, because ~/.bun/bin usually comes first on PATH.
+	if [ -L "$HOME/.bun/bin/omp" ] && readlink "$HOME/.bun/bin/omp" | grep -q "@oh-my-pi"; then
+		rm -f "$HOME/.bun/bin/omp"
+		echo "Removed the non-working Bun global omp link (~/.bun/bin/omp)."
+	fi
+	hash -r
+	"$PREFIX/bin/omp" --version
+}
+
+if [ "$WANT_CLAUDE" = 1 ]; then install_claude; fi
+if [ "$WANT_OMP" = 1 ]; then install_omp; fi
+
+say "Done"
+if [ "$WANT_CLAUDE" = 1 ]; then
+	echo "Claude Code $(claude --version | cut -d' ' -f1): run \`claude\`, then /login. Updates install themselves (\`claude update\` forces a check)."
+	echo "Let it change Android settings: adb-local pair PORT CODE (see README)."
 fi
-
-if ! grep -q 'HOME/.local/bin' "$HOME/.bashrc" 2>/dev/null; then
-	printf '\n# Claude Code native install (after $PREFIX/bin so the Termux launcher wins)\nexport PATH="$PATH:$HOME/.local/bin"\n' >> "$HOME/.bashrc"
+if [ "$WANT_OMP" = 1 ]; then
+	echo "oh-my-pi $(omp --version | cut -d/ -f2): run \`omp\` and sign in. Update with \`omp update\`."
 fi
-
-say "Android access helpers"
-pkg install -y android-tools termux-api nmap >/dev/null
-install -m 755 "$SRC/android/adb-local" "$PREFIX/bin/adb-local"
-mkdir -p "$HOME/.claude"
-if [ -e "$HOME/.claude/CLAUDE.md" ] && ! cmp -s "$SRC/android/CLAUDE.md" "$HOME/.claude/CLAUDE.md"; then
-	cp "$SRC/android/CLAUDE.md" "$HOME/.claude/CLAUDE.android.md"
-	echo "Kept your ~/.claude/CLAUDE.md; the Android guide is in ~/.claude/CLAUDE.android.md"
-else
-	cp "$SRC/android/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
-fi
-
-say "Done: $(claude --version)"
-cat <<'EOF'
-Next:
-  claude                      start, then /login
-  adb-local pair PORT CODE    let Claude change Android settings (see README)
-Updates install themselves; `claude update` forces a check.
-EOF
