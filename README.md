@@ -5,7 +5,8 @@ Run AI coding agents **natively on Android in Termux**, with no proot, no chroot
 | Agent | Status | How |
 |---|---|---|
 | [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) | ✅ Works | Plain `npm install` (no native code needed) |
-| [Claude Code](https://code.claude.com) | ✅ Works | `scripts/install-claude-code.py` runs the official release on Termux's Android build of Bun |
+| [Claude Code](https://code.claude.com) | ✅ Works (2.1.112) | `scripts/install-claude-code-js.sh`: last pure-JS release, full interactive UI on Termux Node |
+| Claude Code latest | ⚠️ Print mode only | `scripts/install-claude-code.py`: current release on Android Bun, `claude-latest -p "..."` |
 | [oh-my-pi](https://github.com/can1357/oh-my-pi) | 🔨 In progress | Needs its Rust `pi-natives` addon compiled for Android |
 
 Tested on a Samsung Galaxy Tab S9 FE (Android 16, aarch64), Termux from F-Droid, Node 26, Bun 1.4.5, Rust 1.96.
@@ -46,29 +47,34 @@ pi            # then /login
 
 ## Claude Code
 
+### Interactive: `claude` (2.1.112)
+
 ```sh
-python3 scripts/install-claude-code.py          # latest
-python3 scripts/install-claude-code.py 2.1.332  # a specific version
+sh scripts/install-claude-code-js.sh
 claude        # then /login
 ```
 
-### How it works
+2.1.112 (April 2026) is the **last release published as plain JavaScript** (`cli.js`). It runs on Termux's own Node.js, with the full interactive UI. From 2.1.113 on, npm only ships glibc/musl native binaries. The script pins that version and turns off the auto-updater, which would otherwise replace it with a build that can't run. It's an old version, so newer features and models may be missing, and Anthropic could at some point stop accepting old clients.
 
-Claude Code ships as a [Bun single-file executable](https://bun.sh/docs/bundler/executables). The program is still JavaScript, stored as a module graph in the ELF `.bun` section. The script:
+### Latest, print mode only: `claude-latest`
+
+```sh
+python3 scripts/install-claude-code.py          # latest
+claude-latest -p "explain this repo"
+```
+
+Current releases ship as a [Bun single-file executable](https://bun.sh/docs/bundler/executables). The program inside is still JavaScript, stored as a module graph in the ELF `.bun` section. The script:
 
 1. downloads the official `@anthropic-ai/claude-code-linux-arm64` package from npm on your device,
 2. parses the `.bun` section and writes each embedded module to `~/.local/share/claude-android/<version>/`,
 3. rewrites the internal `/$bunfs/root/` paths to that directory,
-4. installs a `claude` wrapper in `$PREFIX/bin` that runs the entry point with your Android `bun`.
+4. installs a `claude-latest` wrapper that runs the entry point with your Android `bun`.
 
-This repo contains **no Anthropic code**. Everything is fetched from npm and extracted locally. Your use of Claude Code is still governed by [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance). This is an unofficial workaround, not supported by Anthropic.
+**Why the interactive UI doesn't work:** the terminal renderer calls `Bun.ant.CellSegmenter`, a native text-layout API that exists only in Anthropic's internal Bun build (`This runtime has no Bun.ant.CellSegmenter`). Public Bun doesn't have it, so every frame throws and the screen stays blank, which looks like a hang. Non-interactive `-p` mode never draws the UI, so it works. A JavaScript stand-in would mean reverse-engineering an undocumented binary interface that changes between releases, so this repo doesn't attempt it.
 
-### Limitations
+Other limits of `claude-latest`: no auto-update (re-run the script), no clipboard image paste or voice (those are glibc `.node` addons), and search uses Termux `ripgrep`.
 
-- **No auto-update.** The built-in updater would download a glibc binary, so the wrapper sets `DISABLE_AUTOUPDATER=1`. Re-run the script to update.
-- **Clipboard image paste and voice input don't work.** Those use bundled glibc `.node` addons that can't load on bionic. Everything else tested so far works.
-- **Search uses Termux's `ripgrep`** (`USE_BUILTIN_RIPGREP=0`) instead of the bundled one.
-- **The extractor may need updating.** It relies on Bun's internal executable format. If a future release changes it, the script exits with a clear error rather than installing something broken.
+This repo contains **no Anthropic code**. Both scripts fetch the official packages from npm on your device. Your use of Claude Code is governed by [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance). These are unofficial workarounds, not supported by Anthropic.
 
 ## oh-my-pi (work in progress)
 
@@ -81,7 +87,7 @@ cd oh-my-pi && rm -f rust-toolchain.toml
 RUSTC_BOOTSTRAP=1 cargo build --release -j4 --ignore-rust-version -p omp-natives
 ```
 
-The project pins a nightly toolchain (rustc ≥ 1.101), and Termux ships stable Rust, which is why the build needs those flags. Desktop-only crates (clipboard, X11/Wayland, voice) may also need patching for Android. This section will be updated with the result. Use `-j4` or lower on devices with less than 8 GB of RAM.
+The project pins a nightly toolchain (rustc ≥ 1.101), and Termux ships stable Rust, which is why the build needs those flags. On a Galaxy Tab S9 FE, about 236 crates compile, then rustc crashes with a stack overflow parsing `cranelift-codegen` (pulled in for WASM support). Raising `RUST_MIN_STACK` didn't help. The next things to try are cross-compiling from a Linux PC with the Android NDK, or building without the WASM feature. Turn off fat LTO on low-RAM devices (`CARGO_PROFILE_RELEASE_LTO=off`).
 
 ## License
 

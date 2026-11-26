@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Install Claude Code natively on Termux (Android, aarch64).
+"""Install the LATEST Claude Code on Termux (Android, aarch64) as `claude-latest`.
+
+Limitation: only non-interactive print mode (`claude-latest -p "..."`) works.
+The interactive UI calls Bun.ant.CellSegmenter, a native API that exists only
+in Anthropic's internal Bun build, so the full-screen UI never draws. For the
+interactive UI use scripts/install-claude-code-js.sh (2.1.112, plain Node).
 
 Anthropic publishes Claude Code as a Bun single-file executable linked against
 glibc/musl, which Android's bionic libc cannot load. The JavaScript inside that
@@ -10,7 +15,7 @@ script:
      from npm (on your own device; nothing is redistributed by this repo),
   2. reads the embedded Bun module graph out of the ELF `.bun` section,
   3. writes each module to disk and rewrites the `/$bunfs/root/` paths,
-  4. installs a `claude` wrapper in $PREFIX/bin that runs it with `bun`.
+  4. installs a `claude-latest` wrapper in $PREFIX/bin that runs it with `bun`.
 
 Usage:  python3 install-claude-code.py [VERSION]     (default: latest)
 Requires: bun, npm, ripgrep (pkg install nodejs ripgrep; bun via bun-termux).
@@ -129,17 +134,17 @@ def main():
     rewrite(dest, entry, names)
     print(f"  {len(names)} modules, entry {entry}")
 
-    wrapper = os.path.join(PREFIX, "bin", "claude")
+    wrapper = os.path.join(PREFIX, "bin", "claude-latest")
     with open(wrapper, "w") as f:
         f.write(f"""#!{PREFIX}/bin/sh
-# Claude Code on Termux via Android Bun - installed by termux-coding-agents
+# Latest Claude Code via Android Bun (print mode only) - installed by termux-coding-agents
 export DISABLE_AUTOUPDATER=1      # the built-in updater fetches glibc binaries
 export USE_BUILTIN_RIPGREP=0      # use Termux's ripgrep (pkg install ripgrep)
 exec bun "{dest}/{entry}" "$@"
 """)
     os.chmod(wrapper, 0o755)
     print("  checking ...", sh(wrapper, "--version"))
-    print(f"Done. Run `claude`. To update later, run this script again.")
+    print('Done. Use `claude-latest -p "..."`. Re-run this script to update.')
 
 
 if __name__ == "__main__":
