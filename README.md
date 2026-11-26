@@ -35,7 +35,7 @@ On Android, two things prevent that:
 This repo adds two small programs (in [`glibc-exec/`](glibc-exec)):
 
 - **`gexec`** is a userspace `exec`. It's an ordinary Android program that maps glibc's `ld.so` into memory itself and builds the startup stack the kernel would (`argv`, `envp`, `auxv`). Then it jumps to the loader's entry point, which loads the real program. Android permits this because mapping app files as executable is allowed (that's how apps load their own libraries); only `execve()` is blocked.
-- **`gexec-preload.so`** is an `LD_PRELOAD` shim inside the glibc process. When Claude Code starts a program, it routes Termux binaries and scripts through `linker64` (with `termux-exec` restored for them) and glibc binaries back through `gexec`. It also makes `/proc/self/exe` report the real Claude binary, so Claude can relaunch itself (that's how its bundled ripgrep runs).
+- **`gexec-preload.so`** is an `LD_PRELOAD` shim inside the glibc process. When Claude Code starts a program, it routes Termux binaries and scripts through `linker64` (with `termux-exec` restored for them) and glibc binaries back through `gexec`. It also makes `/proc/self/exe` report the real Claude binary, so Claude can relaunch itself (that's how its bundled ripgrep runs). It also replaces `getifaddrs()`: Android 11+ refuses the netlink request glibc uses (`RTM_GETLINK`, which fails with "Permission denied"), and that broke oh-my-pi's sign-in with "getifaddrs returned an error". The shim lists interfaces with `RTM_GETADDR` instead, as Android's own libc does.
 
 `claude` in `$PREFIX/bin` is a short launcher script. It finds the version the official installer linked at `~/.local/bin/claude` and starts it with `gexec`.
 
