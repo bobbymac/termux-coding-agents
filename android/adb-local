@@ -1,0 +1,83 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# adb-local: ADB to this same device over Wireless debugging (no PC, no root).
+#
+#   adb-local pair PORT CODE   first time: Settings > Developer options >
+#                              Wireless debugging > "Pair device with pairing code"
+#   adb-local connect          (re)connect; finds the current port itself
+#   adb-local shell [CMD...]   run a command as the ADB shell user (uid 2000)
+#   adb-local status
+#
+# The connect port changes whenever Wireless debugging is toggled or the device
+# restarts, so `connect` asks mDNS first and falls back to a local port scan.
+set -euo pipefail
+HOST=127.0.0.1
+STATE="$HOME/.cache/adb-local-port"
+
+connected_serial() {
+	adb devices 2>/dev/null | awk -v h="$HOST:" 'index($1, h) == 1 && $2 == "device" { print $1; exit }'
+}
+
+find_port() {
+	local p
+	# 1) mDNS service advertised by Android for the TLS connect endpoint
+	p=$(adb mdns services 2>/dev/null | awk '/_adb-tls-connect/ { n = split($NF, a, ":"); print a[n]; exit }')
+	[ -n "$p" ] && { echo "$p"; return; }
+	# 2) the last port that worked
+	if [ -f "$STATE" ]; then
+		p=$(cat "$STATE")
+		nc -z "$HOST" "$p" 2>/dev/null && { echo "$p"; return; }
+	fi
+	# 3) scan the range Android picks from
+	nmap -sT -p 30000-49999 --open -T5 -n "$HOST" 2>/dev/null |
+		awk '/^[0-9]+\/tcp +open/ { split($1, a, "/"); print a[1] }' | while read -r p; do
+		if timeout 5 adb connect "$HOST:$p" 2>/dev/null | grep -q "connected to"; then
+			echo "$p"
+			return
+		fi
+	done
+}
+
+cmd_connect() {
+	local s
+	s=$(connected_serial) && [ -n "$s" ] && { echo "$s"; return; }
+	adb start-server >/dev/null 2>&1 || true
+	local port
+	port=$(find_port)
+	if [ -z "$port" ]; then
+		echo "adb-local: no Wireless debugging port found. Turn on Settings > Developer options > Wireless debugging (and pair first: adb-local pair PORT CODE)." >&2
+		return 1
+	fi
+	adb connect "$HOST:$port" >/dev/null 2>&1 || true
+	s=$(connected_serial)
+	if [ -z "$s" ]; then
+		echo "adb-local: found port $port but could not connect. Pair again: adb-local pair PORT CODE" >&2
+		return 1
+	fi
+	mkdir -p "$(dirname "$STATE")"
+	echo "$port" > "$STATE"
+	echo "$s"
+}
+
+case "${1:-status}" in
+pair)
+	[ $# -eq 3 ] || { echo "usage: adb-local pair PORT CODE" >&2; exit 2; }
+	adb pair "$HOST:$2" "$3"
+	cmd_connect
+	;;
+connect)
+	cmd_connect
+	;;
+shell)
+	shift
+	s=$(cmd_connect)
+	exec adb -s "$s" shell "$@"
+	;;
+status)
+	s=$(connected_serial || true)
+	if [ -n "$s" ]; then echo "connected: $s ($(adb -s "$s" shell id -un 2>/dev/null))"; else echo "not connected"; fi
+	;;
+*)
+	sed -n '2,12p' "$0"
+	exit 2
+	;;
+esac

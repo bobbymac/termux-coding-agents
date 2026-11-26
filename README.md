@@ -1,94 +1,87 @@
 # termux-coding-agents
 
-Run AI coding agents **natively on Android in Termux**, with no proot, no chroot and no glibc layer:
+Run the **official, current Claude Code CLI natively on Android** in Termux, with the full interactive UI and its built-in auto-updates. No root, no proot, no PC. Also covers [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), plus notes on oh-my-pi.
 
-| Agent | Status | How |
-|---|---|---|
-| [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) | ✅ Works | Plain `npm install` (no native code needed) |
-| [Claude Code](https://code.claude.com) | ✅ Works (2.1.112) | `scripts/install-claude-code-js.sh`: last pure-JS release, full interactive UI on Termux Node |
-| Claude Code latest | ⚠️ Print mode only | `scripts/install-claude-code.py`: current release on Android Bun, `claude-latest -p "..."` |
-| [oh-my-pi](https://github.com/can1357/oh-my-pi) | 🔨 In progress | Needs its Rust `pi-natives` addon compiled for Android |
+| Agent | Status |
+|---|---|
+| **Claude Code** (latest) | ✅ Official linux-arm64 build: interactive UI, bundled search, auto-updates, `claude update` |
+| **pi** | ✅ `npm install -g @earendil-works/pi-coding-agent` |
+| **oh-my-pi** | ❌ Not working yet (see below) |
 
-Tested on a Samsung Galaxy Tab S9 FE (Android 16, aarch64), Termux from F-Droid, Node 26, Bun 1.4.5, Rust 1.96.
+Tested on a Samsung Galaxy Tab S9 FE, Android 16, Termux from Google Play (`googleplay.2026.10.09`), Claude Code 2.1.330 → 2.1.332.
 
-## Why the usual installs fail
+## Install Claude Code
 
-Termux runs on Android's **bionic** libc. Most prebuilt Linux binaries on npm are linked against **glibc** or **musl**, and `npm` reports Android as `android-arm64`, a platform most packages don't publish. So you see errors like:
-
-```
-error: Unsupported platform: android-arm64
-Supported platforms: linux-x64, linux-arm64, darwin-x64, ...
-```
-
-```
-Either postinstall did not run (--ignore-scripts, some pnpm configs)
-or the platform-native optional dependency was not downloaded
-```
-
-Python tools such as `uv` don't help here: these are Node/Bun native addons and executables, not Python libraries. The fixes are to use a pure-JS path, to run the JavaScript on a native Android runtime, or to recompile the native code for Android.
-
-## Prerequisites
+In Termux:
 
 ```sh
-pkg update
-pkg install nodejs git python ripgrep
+curl -fsSL https://raw.githubusercontent.com/bobbymac/termux-coding-agents/main/install.sh | bash
+claude          # then /login
 ```
 
-You also need **Bun built for Android** at `~/.bun/bin/bun` (`bun --version` should work, and `file $(command -v bun)` should mention `/system/bin/linker64`). The official `bun.sh` installer ships glibc builds that won't run.
+Or clone the repo and run `bash install.sh`. It takes about a minute and is safe to re-run.
+
+**Updates:** Claude Code updates itself, as on any Linux machine. `claude update` forces a check, and `claude install <version>` switches versions. The `claude` launcher always starts whatever version the official updater selected.
+
+## Why this is hard, and how it works
+
+Anthropic ships Claude Code for Linux as a glibc binary that bundles Anthropic's own build of Bun. The interactive UI depends on native functions that exist only in that build (`Bun.ant.CellSegmenter`), so running the JavaScript on public Bun or Node only gets you `claude -p`. The real binary has to run.
+
+On Android, two things prevent that:
+
+1. **Termux uses bionic, not glibc.** This part is solved: Termux provides an Android-adapted glibc in its `termux-glibc` repository.
+2. **Android forbids `execve()` on app files.** Apps targeting Android 10+ (including Termux from Google Play) may not execute files from their own data directory. Termux works around this by starting every program through `/system/bin/linker64`, but glibc's loader can't be started that way (`Could not find a PHDR`). `glibc-runner`, `patchelf` and `proot` all hit this wall.
+
+This repo adds two small programs (in [`glibc-exec/`](glibc-exec)):
+
+- **`gexec`** is a userspace `exec`. It's an ordinary Android program that maps glibc's `ld.so` into memory itself and builds the startup stack the kernel would (`argv`, `envp`, `auxv`). Then it jumps to the loader's entry point, which loads the real program. Android permits this because mapping app files as executable is allowed (that's how apps load their own libraries); only `execve()` is blocked.
+- **`gexec-preload.so`** is an `LD_PRELOAD` shim inside the glibc process. When Claude Code starts a program, it routes Termux binaries and scripts through `linker64` (with `termux-exec` restored for them) and glibc binaries back through `gexec`. It also makes `/proc/self/exe` report the real Claude binary, so Claude can relaunch itself (that's how its bundled ripgrep runs).
+
+`claude` in `$PREFIX/bin` is a short launcher script. It finds the version the official installer linked at `~/.local/bin/claude` and starts it with `gexec`.
+
+## Let Claude Code manage Android
+
+Termux apps can barely touch the system on their own. `settings`, `pm` and `dumpsys` refuse. To let Claude change settings, disable apps or grant permissions, connect ADB to the device itself over **Wireless debugging** (no PC, no root):
+
+1. **Turn on Developer options:** Settings > About tablet > Software information > tap **Build number** 7 times.
+2. **Open the pairing screen:** Settings > Developer options > turn on **Wireless debugging** > tap it > **Pair device with pairing code**.
+3. **Pair from Termux:** use split screen or a floating window, so the code stays visible.
+   ```sh
+   adb-local pair <port shown> <6-digit code>
+   ```
+4. **Check it:** `adb-local status` should report `connected: 127.0.0.1:<port> (shell)`.
+
+After a reboot or toggling Wireless debugging, run `adb-local connect` (Claude can too); it finds the new port itself. Optionally install **Termux:API** from the same store as Termux, for `termux-*` commands (battery, notifications, clipboard, brightness, …).
+
+The installer also puts an Android-aware [`~/.claude/CLAUDE.md`](android/CLAUDE.md) in place. It tells Claude how the environment works and sets ground rules for system changes:
+- explain the change and the undo first, and wait for approval;
+- log every change with its undo command in `~/android-changes.md`;
+- prefer reversible commands (`pm disable-user` over uninstall);
+- never touch Termux, Tailscale, Wireless debugging, lock-screen or security settings, or anything that could cut off the session.
+
+## Limitations
+
+- **aarch64 only.** Tested on Android 16; it should work on any recent Android version.
+- **No clipboard image paste or voice input.** Those parts expect a desktop Linux session.
+- **Some launched programs see a different `argv[0]`.** Termux programs started from Claude see their full path as `argv[0]`, as with `termux-exec`.
+- **Only the `claude` launcher works.** Run Claude Code through it, not the raw binary at `~/.local/bin/claude`. The installer appends `~/.local/bin` to the end of `PATH` (that silences the installer's warning), so the launcher always wins.
+- **It's unofficial.** It's not supported by Anthropic and could break if a future Android or Claude Code release changes how programs start. `claude doctor` is the quickest health check.
+
+This repo contains **no Anthropic code**. The installer downloads the official package from npm, and Claude Code's own installer and updater manage it from there. Your use of Claude Code is governed by [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance).
 
 ## pi
 
 ```sh
 npm install -g @earendil-works/pi-coding-agent
-pi            # then /login
+pi              # then /login
 ```
 
-`@mariozechner/pi-coding-agent` is deprecated and renamed to `@earendil-works/pi-coding-agent`. Uninstall the old one first if you have it.
+`@mariozechner/pi-coding-agent` is deprecated and renamed; uninstall it first if you have it.
 
-## Claude Code
+## oh-my-pi (not working yet)
 
-### Interactive: `claude` (2.1.112)
-
-```sh
-sh scripts/install-claude-code-js.sh
-claude        # then /login
-```
-
-2.1.112 (April 2026) is the **last release published as plain JavaScript** (`cli.js`). It runs on Termux's own Node.js, with the full interactive UI. From 2.1.113 on, npm only ships glibc/musl native binaries. The script pins that version and turns off the auto-updater, which would otherwise replace it with a build that can't run. It's an old version, so newer features and models may be missing, and Anthropic could at some point stop accepting old clients.
-
-### Latest, print mode only: `claude-latest`
-
-```sh
-python3 scripts/install-claude-code.py          # latest
-claude-latest -p "explain this repo"
-```
-
-Current releases ship as a [Bun single-file executable](https://bun.sh/docs/bundler/executables). The program inside is still JavaScript, stored as a module graph in the ELF `.bun` section. The script:
-
-1. downloads the official `@anthropic-ai/claude-code-linux-arm64` package from npm on your device,
-2. parses the `.bun` section and writes each embedded module to `~/.local/share/claude-android/<version>/`,
-3. rewrites the internal `/$bunfs/root/` paths to that directory,
-4. installs a `claude-latest` wrapper that runs the entry point with your Android `bun`.
-
-**Why the interactive UI doesn't work:** the terminal renderer calls `Bun.ant.CellSegmenter`, a native text-layout API that exists only in Anthropic's internal Bun build (`This runtime has no Bun.ant.CellSegmenter`). Public Bun doesn't have it, so every frame throws and the screen stays blank, which looks like a hang. Non-interactive `-p` mode never draws the UI, so it works. A JavaScript stand-in would mean reverse-engineering an undocumented binary interface that changes between releases, so this repo doesn't attempt it.
-
-Other limits of `claude-latest`: no auto-update (re-run the script), no clipboard image paste or voice (those are glibc `.node` addons), and search uses Termux `ripgrep`.
-
-This repo contains **no Anthropic code**. Both scripts fetch the official packages from npm on your device. Your use of Claude Code is governed by [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance). These are unofficial workarounds, not supported by Anthropic.
-
-## oh-my-pi (work in progress)
-
-`omp` installs with `bun install -g`, but it fails at startup because `@oh-my-pi/pi-natives` has no `android-arm64` build. The current attempt compiles it from source on the device:
-
-```sh
-pkg install rust clang make pkg-config binutils
-git clone --depth 1 --branch v19.2.1 https://github.com/can1357/oh-my-pi.git
-cd oh-my-pi && rm -f rust-toolchain.toml
-RUSTC_BOOTSTRAP=1 cargo build --release -j4 --ignore-rust-version -p omp-natives
-```
-
-The project pins a nightly toolchain (rustc ≥ 1.101), and Termux ships stable Rust, which is why the build needs those flags. On a Galaxy Tab S9 FE, about 236 crates compile, then rustc crashes with a stack overflow parsing `cranelift-codegen` (pulled in for WASM support). Raising `RUST_MIN_STACK` didn't help. The next things to try are cross-compiling from a Linux PC with the Android NDK, or building without the WASM feature. Turn off fat LTO on low-RAM devices (`CARGO_PROFILE_RELEASE_LTO=off`).
+`omp` fails at startup because its Rust addon `@oh-my-pi/pi-natives` has no `android-arm64` build. Compiling it on the device fails: the project pins nightly Rust (≥ 1.101), and with stable Termux Rust, `rustc` crashes with a stack overflow on `cranelift-codegen` after about 236 crates. A promising next step is running `omp` on the official glibc Bun through `gexec`. Then it reports `linux-arm64`, and the published prebuilt addon applies.
 
 ## License
 
-MIT for the scripts and docs in this repo. The tools themselves are under their own licenses.
+MIT for everything in this repo. The tools it installs are under their own licenses.
