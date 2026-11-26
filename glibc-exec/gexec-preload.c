@@ -12,6 +12,7 @@
 // Children always get bionic's LD_PRELOAD (libtermux-exec.so) back, so Termux
 // programs launched from here can launch further programs normally.
 // readlink("/proc/self/exe") reports $GEXEC_SELF instead of /system/bin/linker64.
+// getifaddrs() uses RTM_GETADDR only, since Android 11+ denies apps RTM_GETLINK.
 //
 // execve() may run in a vfork() child, so the rewrite path never allocates.
 #define _GNU_SOURCE
